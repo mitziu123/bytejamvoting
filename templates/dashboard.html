@@ -27,13 +27,14 @@
       </div>
       <div class="text-right text-sm muted">
         <div>{{ first_name }} {{ last_name }}</div>
-        <div class="mt-1">Company PIN: <span class="font-semibold text-[var(--text-dark)]">{{ company_pin }}</span></div>
+        {% if company_pin %}
+          <div class="mt-1">PIN <span class="font-semibold">{{ company_pin }}</span></div>
+        {% endif %}
 
-        {% if session.get('role') == 'company' %}
-          <div class="text-xs mt-1 text-white/80">Note: Business accounts only see IHCC teams.</div>
-        {% elif session.get('role') == 'coach' and session.get('team_division') in ['Bits','Bytes'] %}
-          {% set coach_div = session.get('team_division') %}
-          <div class="text-xs mt-1 text-white/80">Note: As a {{ coach_div }} coach you may only vote for the opposite division.</div>
+        {% if voter_role == 'company' %}
+          <div class="text-xs mt-1">Company ballots cover IHCC teams.</div>
+        {% elif voter_role == 'coach' and teams %}
+          <div class="text-xs mt-1">Your coach ballot covers {{ teams | join(', ') }} teams.</div>
         {% endif %}
       </div>
     </div>
@@ -47,51 +48,13 @@
       <section class="lg:col-span-2 card p-6 rounded-2xl shadow-lg">
         <h2 class="text-xl font-semibold mb-4 text-white">Teams</h2>
 
-        {# determine allowed divisions according to session #}
-        {% set allowed_divisions = [] %}
-
-{# Business accounts only see IHCC #}
-{% if session.get('role') == 'company' %}
-  {% set _ = allowed_divisions.append('IHCC') %}
-
-{# Coaches see the opposite division (existing behavior) #}
-{% elif session.get('role') == 'coach' %}
-  {% set coach_div = session.get('team_division') %}
-  {% if coach_div == 'Bits' %}
-    {% set _ = allowed_divisions.append('Bytes') %}
-  {% elif coach_div == 'Bytes' %}
-    {% set _ = allowed_divisions.append('Bits') %}
-  {% else %}
-    {# coach without division: show all (safe default) #}
-    {% for d in teams.keys() %}
-      {% set _ = allowed_divisions.append(d) %}
-    {% endfor %}
-  {% endif %}
-
-{# IHCC students: only see Bits & Bytes (UI-only) #}
-{% elif session.get('role') == 'student' %}
-  {% set student_company_div = session.get('company_division') %}
-  {% if student_company_div == 'IHCC' %}
-    {% set _ = allowed_divisions.append('Bits') %}
-    {% set _ = allowed_divisions.append('Bytes') %}
-  {% else %}
-    {# student with no company_division set: show all divisions by default #}
-    {% for d in teams.keys() %}
-      {% set _ = allowed_divisions.append(d) %}
-    {% endfor %}
-  {% endif %}
-
-{# all other roles (guests, etc.) see all divisions #}
-{% else %}
-  {% for d in teams.keys() %}
-    {% set _ = allowed_divisions.append(d) %}
-  {% endfor %}
-{% endif %}
-
-
-        {# iterate divisions but only render those allowed #}
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+          <p class="mb-3 text-sm" role="{{ 'alert' if category == 'danger' else 'status' }}">{{ message }}</p>
+        {% endfor %}
+        {% if voter_role == 'student' %}
+          <p class="mb-4 muted text-sm">Your scores count toward Student Choice.</p>
+        {% endif %}
         {% for division, teams_in_div in teams.items() %}
-          {% if division in allowed_divisions %}
             <div class="mb-6">
               <h3 class="text-sm font-medium uppercase text-[var(--primary)] mb-3">{{ division }}</h3>
 
@@ -131,27 +94,17 @@
 
                       <form action="{{ url_for('submit_vote') }}" method="POST" {% if voted_for_team %}aria-hidden="true"{% endif %}>
                         <input type="hidden" name="team" value="{{ team }}">
-                        <p class="text-sm muted mb-3">Role: <span class="text-white">{{ session['role'] }}</span></p>
-
-                        {% if session['role'] == "student" %}
-                          {% for category in ["Amazement", "Theme", "Performance"] %}
-                            <label class="block mt-2 mb-1 text-sm">{{ category }}</label>
-                            <select name="{{ category | lower | replace(' ', '_') }}" class="w-full p-2 rounded bg-white/5 border border-white/6 text-white mb-2" {% if voted_for_team %}disabled{% endif %}>
+                        {% for field, label, description in criteria %}
+                          <label class="block mt-2 mb-1 text-sm">
+                            {{ label }}
+                            {% if description %}<span class="block muted">{{ description }}</span>{% endif %}
+                            <select name="{{ field }}" class="w-full p-2 rounded bg-white/5 border border-white/6 text-white mb-2" {% if voted_for_team %}disabled{% endif %}>
                               {% for i in range(6) %}
                                 <option value="{{ i }}">{{ i }}</option>
                               {% endfor %}
                             </select>
-                          {% endfor %}
-                        {% else %}
-                          {% for category in ["Creativity", "VisualDesign", "Professionalism", "Communication", "Performance"] %}
-                            <label class="block mt-2 mb-1 text-sm">{{ category }}</label>
-                            <select name="{{ category | lower | replace(' ', '_') }}" class="w-full p-2 rounded bg-white/5 border border-white/6 text-white mb-2" {% if voted_for_team %}disabled{% endif %}>
-                              {% for i in range(6) %}
-                                <option value="{{ i }}">{{ i }}</option>
-                              {% endfor %}
-                            </select>
-                          {% endfor %}
-                        {% endif %}
+                          </label>
+                        {% endfor %}
 
                         {% if not voted_for_team %}
                           <button type="submit" class="mt-4 w-full py-2 rounded bg-[var(--primary)] text-[var(--text-dark)] font-semibold hover:bg-[#e6951f] transition">
@@ -166,7 +119,8 @@
                 {% endfor %}
               </ul>
             </div>
-          {% endif %}
+        {% else %}
+          <p class="muted text-sm">No teams are available for your ballot.</p>
         {% endfor %}
 
       </section>

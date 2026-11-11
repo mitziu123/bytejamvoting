@@ -31,6 +31,10 @@
 
       <h2 class="text-xl font-bold mb-6">Who are you voting as?</h2>
 
+      {% for message in get_flashed_messages(category_filter=['danger']) %}
+        <p class="mb-4 text-rose-300" role="alert">{{ message }}</p>
+      {% endfor %}
+
       <form method="POST" action="/register_user" id="signupForm">
 
         <!-- role selector -->
@@ -39,34 +43,34 @@
                 class="w-full p-2 rounded bg-[#2c2c2c] border border-gray-600 mb-6 text-white"
                 onchange="toggleFields()" required>
           <option value="">Select an option</option>
-          <option value="member">Student / Coach / Company</option>
-          <option value="guest">Guest</option>
+          <option value="member">Coach / Company</option>
+          <option value="student">Student</option>
         </select>
 
         <!-- hidden user_type -->
         <input type="hidden" id="user_type" name="user_type">
 
-        <!-- Guest form -->
-        <div id="guest-fields" class="hidden">
+        <!-- Student form -->
+        <div id="student-fields" class="hidden">
           <label class="block mb-1 text-sm text-white">First Name</label>
-          <input name="first_name" id="guest-first" type="text"
+          <input name="first_name" id="student-first" type="text"
                  class="w-full p-2 border rounded mb-2 bg-white text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
                  placeholder="First name">
 
           <label class="block mt-3 mb-1 text-sm text-white">Last Name</label>
-          <input name="last_name" id="guest-last" type="text"
+          <input name="last_name" id="student-last" type="text"
                  class="w-full p-2 border rounded mb-2 bg-white text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
                  placeholder="Last name">
 
           <label class="block mt-3 mb-1 text-sm text-white">PIN</label>
-          <input name="pin" id="guest-pin" value="{{ fresh_pin }}" readonly maxlength="4"
+          <input name="pin" id="student-pin" value="{{ fresh_pin }}" readonly maxlength="4"
                  class="w-full p-2 border rounded mb-2 bg-gray-200 text-black text-center font-semibold"
                  aria-readonly="true">
         </div>
 
         <!-- Member form -->
         <div id="member-fields" class="hidden">
-          <label class="block mb-1 text-sm text-white">Company PIN</label>
+          <label class="block mb-1 text-sm text-white">Coach or company PIN</label>
           <input name="company_pin" id="member-pin" maxlength="4"
                  class="w-full p-2 border rounded mb-2 bg-white text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[var(--primary)]">
 
@@ -91,7 +95,7 @@
   </main>
 
   <script>
-    const guest = document.getElementById("guest-fields");
+    const student = document.getElementById("student-fields");
     const member = document.getElementById("member-fields");
     const userType = document.getElementById("user_type");
 
@@ -106,19 +110,19 @@
     function toggleFields() {
       const role = document.getElementById("role").value;
 
-      guest.classList.add("hidden");
+      student.classList.add("hidden");
       member.classList.add("hidden");
 
       // clear required flags
-      setRequired(guest, false);
+      setRequired(student, false);
       setRequired(member, false);
 
-      if (role === "guest") {
-        guest.classList.remove("hidden");
-        setRequired(guest, true);
+      if (role === "student") {
+        student.classList.remove("hidden");
+        setRequired(student, true);
         userType.value = "2";
         // focus first input for UX
-        document.getElementById("guest-first").focus();
+        document.getElementById("student-first").focus();
       }
       if (role === "member") {
         member.classList.remove("hidden");

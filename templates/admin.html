@@ -64,32 +64,41 @@
         <!-- RESULTS -->
         <div id="results-section" class="section hidden" role="region" aria-labelledby="tab-results">
           <h3 class="text-lg font-semibold mb-3">Voting Results</h3>
-          <div class="overflow-x-auto">
-            <table class="w-full table-auto border-collapse text-sm">
-              <thead class="bg-white/6 text-[var(--muted)]">
-                <tr>
-                  <th class="px-3 py-2 text-left">Rank</th>
-                  <th class="px-3 py-2 text-left">Team ID</th>
-                  <th class="px-3 py-2 text-left">Team Name</th>
-                  <th class="px-3 py-2 text-left">Adjusted</th>
-                  <th class="px-3 py-2 text-left">Raw Avg</th>
-                  <th class="px-3 py-2 text-left">Votes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for rank, (team_id, data) in team_scores %}
-                  <tr class="border-t border-white/6">
-                    <td class="px-3 py-2">{{ rank }}</td>
-                    <td class="px-3 py-2">{{ team_id }}</td>
-                    <td class="px-3 py-2">{{ data.team_name }}</td>
-                    <td class="px-3 py-2">{{ data.adjusted_score }}</td>
-                    <td class="px-3 py-2">{{ data.raw_average }}</td>
-                    <td class="px-3 py-2">{{ data.vote_count }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+          {% for award, scores in award_results.items() %}
+            <section class="mb-6">
+              <h4 class="text-base font-semibold mb-2">{{ award }}</h4>
+              {% if scores %}
+                <div class="overflow-x-auto">
+                  <table class="w-full table-auto border-collapse text-sm" aria-label="{{ award }} results">
+                    <thead class="bg-white/6 text-[var(--muted)]">
+                      <tr>
+                        <th class="px-3 py-2 text-left">Rank</th>
+                        <th class="px-3 py-2 text-left">Team</th>
+                        {% if award == 'Student Choice' %}<th class="px-3 py-2 text-left">Division</th>{% endif %}
+                        <th class="px-3 py-2 text-left">Adjusted</th>
+                        <th class="px-3 py-2 text-left">Raw Avg</th>
+                        <th class="px-3 py-2 text-left">Ballots</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for team in scores %}
+                        <tr class="border-t border-white/6">
+                          <td class="px-3 py-2">{{ loop.index }}</td>
+                          <td class="px-3 py-2">{{ team.team_name }}</td>
+                          {% if award == 'Student Choice' %}<td class="px-3 py-2">{{ team.division }}</td>{% endif %}
+                          <td class="px-3 py-2">{{ '%.4f' | format(team.adjusted_score) }}</td>
+                          <td class="px-3 py-2">{{ '%.4f' | format(team.raw_average) }}</td>
+                          <td class="px-3 py-2">{{ team.vote_count }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              {% else %}
+                <p class="text-sm text-[var(--muted)]">No ballots yet.</p>
+              {% endif %}
+            </section>
+          {% endfor %}
         </div>
 
         <!-- SETTINGS -->

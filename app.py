@@ -128,6 +128,49 @@ with app.app_context():
 
 
 # ---------- Helpers ----------
+STUDENT_CRITERIA = (
+    ('project_wow', 'Project Wow!', "Did the team's project amaze you?"),
+    ('theme', 'Theme', 'Did the project represent the theme well?'),
+    ('performance', 'Performance', 'Did the project perform as intended?'),
+)
+JUDGING_CRITERIA = (
+    ('creativity', 'Creativity', ''),
+    ('visualdesign', 'Visual Design', ''),
+    ('professionalism', 'Professionalism', ''),
+    ('communication', 'Communication', ''),
+    ('performance', 'Performance', ''),
+)
+
+
+def voting_divisions(user):
+    if user.role == 'student':
+        return ('Bits', 'Bytes', 'IHCC')
+    if user.role == 'company':
+        return ('IHCC',)
+    if user.role == 'coach' and user.team:
+        return {'Bits': ('Bytes',), 'Bytes': ('Bits',)}.get(user.team.division, ())
+    return ()
+
+
+def rank_teams(rows):
+    if not rows:
+        return []
+
+    baseline = sum(row.total_score for row in rows) / sum(row.vote_count for row in rows)
+    ranked = [
+        {
+            'team_id': row.team_id,
+            'team_name': row.team_name,
+            'division': row.division,
+            'raw_average': row.total_score / row.vote_count,
+            'adjusted_score': (row.total_score + 10 * baseline) / (row.vote_count + 10),
+            'vote_count': row.vote_count,
+        }
+        for row in rows
+    ]
+    return sorted(ranked, key=lambda team: (-team['adjusted_score'], team['team_name']))
+
+
 def current_voting_window():
     settings = VotingSettings.query.order_by(desc(VotingSettings.id)).first()
     if settings is None:
@@ -243,42 +286,42 @@ def admin_panel():
 
     teams = Team.query.all()
 
-    # Summarize votes
-    raw_results = (
+    ballots = (
         db.session.query(
             Vote.team_id,
-            Team.name.label('team_name'),
-            func.sum(Vote.score).label('total_score'),
-            func.count(func.distinct(Vote.user_id)).label('vote_count')
+            Vote.user_id,
+            User.role,
+            func.sum(Vote.score).label('score'),
         )
-        .join(Team, Team.id == Vote.team_id)
-        .group_by(Vote.team_id, Team.name)
-        .all()
+        .join(User, User.id == Vote.user_id)
+        .filter(
+            ((User.role == 'student') & Vote.category.in_([label for _, label, _ in STUDENT_CRITERIA]))
+            | (User.role.in_(('coach', 'company')) & Vote.category.in_([label for _, label, _ in JUDGING_CRITERIA]))
+        )
+        .group_by(Vote.team_id, Vote.user_id, User.role)
+        .having(
+            ((User.role == 'student') & (func.count(Vote.score) == len(STUDENT_CRITERIA)))
+            | (User.role.in_(('coach', 'company')) & (func.count(Vote.score) == len(JUDGING_CRITERIA)))
+        )
+        .subquery()
     )
-
-    total_all_scores = sum((r.total_score or 0) for r in raw_results)
-    total_all_votes = sum((r.vote_count or 0) for r in raw_results)
-    c = total_all_scores / total_all_votes if total_all_votes > 0 else 0
-
-    # Bayes baseline
-    m = 10
-
-    team_scores = {}
-    for r in raw_results:
-        team_id = r.team_id
-        team_name = r.team_name
-        v = r.vote_count or 0
-        R = (r.total_score / v) if v > 0 else 0
-        adjusted_score = (v * R + m * c) / (v + m) if (v + m) > 0 else 0
-        team_scores[team_id] = {
-            'team_name': team_name,
-            'raw_average': round(R, 4),
-            'adjusted_score': round(adjusted_score, 4),
-            'vote_count': v
-        }
-
-    sorted_scores = sorted(team_scores.items(), key=lambda x: x[1]['adjusted_score'], reverse=True)
-    enumerated_scores = list(enumerate(sorted_scores, start=1))
+    totals = (
+        db.session.query(
+            Team.id.label('team_id'),
+            Team.name.label('team_name'),
+            Team.division,
+            func.sum(ballots.c.score).label('total_score'),
+            func.count().label('vote_count'),
+        )
+        .join(ballots, ballots.c.team_id == Team.id)
+        .group_by(Team.id, Team.name, Team.division)
+    )
+    judging = totals.filter(ballots.c.role.in_(('coach', 'company'))).all()
+    award_results = {
+        division: rank_teams([row for row in judging if row.division == division])
+        for division in ('Bits', 'Bytes', 'IHCC')
+    }
+    award_results['Student Choice'] = rank_teams(totals.filter(ballots.c.role == 'student').all())
 
     team_data = {}
     for t in teams:
@@ -304,7 +347,7 @@ def admin_panel():
         'admin.html',
         companies=company_data,
         teams=team_data,
-        team_scores=enumerated_scores,
+        award_results=award_results,
         voting_settings=voting_settings,
         voting_status=voting_status,
         voting_timezone=os.environ.get('TZ') or datetime.now().astimezone().tzname(),
@@ -348,55 +391,41 @@ def save_voting_settings():
 
 @app.route('/submit_vote', methods=['POST'])
 def submit_vote():
+    _, voting_status = current_voting_window()
+    if voting_status != 'Open':
+        return redirect(url_for('not_allowed'))
+
+    user = db.session.get(User, session.get('user_id')) if 'user_id' in session else None
+    if user is None or user.role == 'guest':
+        flash("Sign in as a student, coach, or company to vote.", "danger")
+        return redirect(url_for('create'))
+
     team_name = (request.form.get('team') or "").strip()
-    # form fields might be None; normalize
-    creativity = request.form.get('creativity')
-    visualdesign = request.form.get('visualdesign')
-    professionalism = request.form.get('professionalism')
-    communication = request.form.get('communication')
-    performance = request.form.get('performance')
-
-    if 'user_id' not in session:
-        flash("You must be logged in to vote.", "danger")
-        return redirect(url_for('login'))
-
-    user_id = session['user_id']
-
-    team_row = db.session.query(Team.id).filter_by(name=team_name).first()
-    if not team_row:
-        flash("Invalid team name.", "danger")
+    team = Team.query.filter_by(name=team_name).first()
+    if team is None or team.division not in voting_divisions(user):
+        flash("That team is unavailable for your ballot.", "danger")
         return redirect(url_for('dashboard'))
-    team_id = team_row[0]
 
-    categories = ["Creativity", "Visual Design", "Professionalism", "Communication", "Performance"]
-    scores = [creativity, visualdesign, professionalism, communication, performance]
-
-    # convert and validate scores
-    parsed_scores = []
+    criteria = STUDENT_CRITERIA if user.role == 'student' else JUDGING_CRITERIA
     try:
-        for s in scores:
-            if s is None or s == "":
-                raise ValueError("All score fields are required.")
-            val = int(s)
-            if val < 0 or val > 10:
-                raise ValueError("Scores must be integers between 0 and 10.")
-            parsed_scores.append(val)
-    except ValueError as ve:
-        flash(str(ve), "danger")
+        scores = [int(request.form[field]) for field, _, _ in criteria]
+        if any(score < 0 or score > (5 if user.role == 'student' else 10) for score in scores):
+            raise ValueError
+    except (KeyError, ValueError):
+        flash("Enter a valid score for every criterion.", "danger")
+        return redirect(url_for('dashboard'))
+
+    if Vote.query.filter_by(user_id=user.id, team_id=team.id).first():
+        flash("You have already voted for this team.", "danger")
         return redirect(url_for('dashboard'))
 
     try:
-        for category, score_val in zip(categories, parsed_scores):
-            existing_vote = Vote.query.filter_by(user_id=user_id, team_id=team_id, category=category).first()
-            if existing_vote:
-                flash(f"You have already voted for {category} in this team.", "danger")
-                return redirect(url_for('dashboard'))
-
-            new_vote = Vote(team_id=team_id, user_id=user_id, category=category, score=score_val)
-            db.session.add(new_vote)
-
+        db.session.add_all([
+            Vote(team_id=team.id, user_id=user.id, category=label, score=score)
+            for (_, label, _), score in zip(criteria, scores)
+        ])
         db.session.commit()
-    except Exception as e:
+    except Exception:
         db.session.rollback()
         app.logger.exception("Error saving votes")
         flash("There was an error saving your vote. Please try again.", "danger")
@@ -408,24 +437,18 @@ def submit_vote():
 
 @app.route("/register_user", methods=["POST"])
 def register_user():
-    """
-    Registration flow:
-      - user_type '1' = existing student/coach/company (they should provide first/last and company_pin)
-          -> find company by pin, find user with that name & company_id. If found, attach to session.
-      - user_type '2' = guest: create a new guest user.
-    """
     user_type = request.form.get('user_type')
 
     # Get remote IP safely
     ip_address = get_client_ip()
 
-    if user_type == '1':  # existing (company/coach/student)
+    if user_type == '1':  # Coach or company
         first_name = (request.form.get('m_first_name') or "").strip()
         last_name = (request.form.get('m_last_name') or "").strip()
         company_pin = (request.form.get('company_pin') or "").strip()
 
         if not (first_name and last_name and company_pin):
-            flash("Name and company pin are required.", "danger")
+            flash("Name and PIN are required.", "danger")
             return redirect(url_for('create'))
 
         # Try to find a company matching that pin
@@ -434,11 +457,11 @@ def register_user():
         user = None
         # 1) If a company exists for that pin, try matching user by company
         if company:
-            user = User.query.filter_by(first_name=first_name, last_name=last_name, company_id=company.id).first()
+            user = User.query.filter_by(first_name=first_name, last_name=last_name, company_id=company.id, role='company').first()
 
         # 2) Fallback: match by first/last + pin (covers team members who have pins but no company_id)
         if not user:
-            user = User.query.filter_by(first_name=first_name, last_name=last_name, pin=company_pin).first()
+            user = User.query.filter_by(first_name=first_name, last_name=last_name, pin=company_pin).filter(User.role.in_(('coach', 'company'))).first()
 
         if user:
             session['user_id'] = user.id
@@ -453,19 +476,17 @@ def register_user():
             return redirect(url_for('create'))
 
 
-    elif user_type == '2':  # guest
+    elif user_type == '2':  # Student registration
         try:
             pin = (request.form.get('pin') or "").strip()
-            # prefer explicit form field names for guest values
             first_name = (request.form.get('first_name') or "").strip()
             last_name = (request.form.get('last_name') or "").strip()
-            company_id = request.form.get('company_id', None)
         except BadRequest:
             flash("Invalid form submission.", "danger")
             return redirect(url_for('create'))
 
         if not (first_name and last_name):
-            flash("First and last name are required for guest registration.", "danger")
+            flash("First and last name are required for student registration.", "danger")
             return redirect(url_for('create'))
 
         # Basic sanitization: pin should be 4 digits if provided
@@ -474,11 +495,10 @@ def register_user():
             return redirect(url_for('create'))
 
         new_user = User(
-            role='guest',
+            role='student',
             first_name=first_name,
             last_name=last_name,
             pin=pin or None,
-            company_id=company_id,
             ip_address=ip_address or ""
         )
 
@@ -487,15 +507,16 @@ def register_user():
             db.session.commit()
         except Exception:
             db.session.rollback()
-            app.logger.exception("Error creating guest user")
-            flash("Could not create guest account. Contact admin.", "danger")
+            app.logger.exception("Error creating student user")
+            flash("Could not create student account. Contact admin.", "danger")
             return redirect(url_for('create'))
 
         session['user_id'] = new_user.id
         session['first_name'] = new_user.first_name
         session['last_name'] = new_user.last_name
         session['pin'] = new_user.pin
-        flash("Guest registered.", "success")
+        session['role'] = new_user.role
+        flash("Student registered.", "success")
         return redirect(url_for('dashboard'))
 
     else:
@@ -513,8 +534,9 @@ def dashboard():
     if voting_status != 'Open':
         return redirect(url_for('not_allowed'))
 
-    if 'user_id' in session:
-        user_id = session['user_id']
+    user = db.session.get(User, session['user_id']) if 'user_id' in session else None
+    if user is not None and user.role != 'guest':
+        user_id = user.id
         first_name = session.get('first_name')
         last_name = session.get('last_name')
         pin = session.get('pin')
@@ -528,7 +550,7 @@ def dashboard():
             for c in companies
         }
 
-        teams = Team.query.all()
+        teams = Team.query.filter(Team.division.in_(voting_divisions(user))).all()
 
         team_data = {}
         for t in teams:
@@ -545,7 +567,8 @@ def dashboard():
                 "has_voted": has_voted
             }
 
-        return render_template('dashboard.html', first_name=first_name, last_name=last_name, company_pin=pin, companies=company_data, teams=team_data)
+        return render_template('dashboard.html', first_name=first_name, last_name=last_name, company_pin=pin, companies=company_data, teams=team_data, voter_role=user.role,
+                               criteria=STUDENT_CRITERIA if user.role == 'student' else JUDGING_CRITERIA)
 
     flash('You must be logged in to view the dashboard.', 'warning')
     return redirect('/create')
