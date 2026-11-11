@@ -3,6 +3,7 @@ import random
 import string
 from datetime import datetime
 from functools import wraps
+from ipaddress import ip_address, ip_network
 
 from flask import (
     Flask, render_template, request, redirect, jsonify,
@@ -41,12 +42,14 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "ihccadminjslj")
 _admin_password_plain = os.environ.get("ADMIN_PASSWORD", "jslj!1238!")  # replace in prod
 _ADMIN_PASSWORD_HASH = generate_password_hash(_admin_password_plain)
 
-# Allowed IPs: can be set as comma-separated env var (e.g. "127.0.0.1,167.142.113.82")
-_allowed_env = os.environ.get("ALLOWED_CONN", "167.142.113.82,127.0.0.1")
-allowed_conn = [ip.strip() for ip in _allowed_env.split(",") if ip.strip()]
-
-# IP restrictions are OFF by default for now; set ALLOW_ALL=false to re-enable them
+# Accept exact addresses and CIDR ranges. Render supplies RENDER automatically.
 ALLOW_ALL = os.environ.get("ALLOW_ALL", "true").lower() in ("1", "true", "yes")
+ON_RENDER = os.environ.get("RENDER") == "true"
+ALLOWED_NETWORKS = tuple(
+    ip_network(entry.strip())
+    for entry in os.environ.get("ALLOWED_CONN", "").split(",")
+    if entry.strip()
+) if not ALLOW_ALL else ()
 
 db = SQLAlchemy(app)
 
@@ -192,40 +195,22 @@ def _verify_admin(username: str, password: str) -> bool:
 
 
 def get_client_ip():
-    # respect X-Forwarded-For if sitting behind proxy (Render / Heroku)
-    forwarded = request.headers.get('X-Forwarded-For', '')
-    if forwarded:
-        # X-Forwarded-For may be a comma separated list; first is client
-        ip = forwarded.split(',')[0].strip()
-    else:
-        ip = request.remote_addr or ''
-    return ip
+    if ON_RENDER:
+        # Render's public edge overwrites this header with the connecting IP.
+        return request.headers.get('CF-Connecting-IP', '').strip()
+    return request.remote_addr or ''
 
 
-def ip_allowed(ip: str) -> bool:
-    if ALLOW_ALL:
-        return True
-    if not ip:
-        return False
-    # exact matches or prefix matches (if you intentionally used prefix like "167.142")
-    for allowed in allowed_conn:
-        if ip == allowed or ip.startswith(allowed):
-            return True
-    return False
-
-
-# ---------- Request guards ----------
 @app.before_request
 def limit_remote_addr():
-    # allow admin-login and static assets even if IP restricted so admin can manage
-    public_paths = ['/admin-login', '/static/']
-    if any(request.path.startswith(p) for p in public_paths):
+    if ALLOW_ALL:
         return
-
-    client_ip = get_client_ip()
-    # logging only in debug mode (not printing in prod)
-    if not ip_allowed(client_ip):
-        abort(403)
+    try:
+        client_ip = ip_address(get_client_ip())
+    except ValueError:
+        abort(403, description="Connect to the school's Wi-Fi to access ByteJam Voting.")
+    if not any(client_ip in network for network in ALLOWED_NETWORKS):
+        abort(403, description="Connect to the school's Wi-Fi to access ByteJam Voting.")
 
 
 # ---------- Auth decorators ----------
