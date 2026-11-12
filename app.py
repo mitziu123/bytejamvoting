@@ -319,6 +319,7 @@ def admin_panel():
             "division": t.division,
             "members": [
                 {
+                    "id": u.id,
                     "first_name": u.first_name,
                     "last_name": u.last_name,
                     "pin": u.pin,
@@ -702,24 +703,16 @@ def handle_form():
                 flash(f"{role.capitalize()} '{first_name} {last_name}' added to '{team.name}'!", "success")
 
             elif action == 'remove_member':
-                parts = request.form['member_name'].split()
-                if len(parts) < 2:
-                    flash("Please provide both first and last name.", "danger")
-                    return redirect(url_for('admin_panel'))
-                first, last = parts[0], parts[1]
-                team = Team.query.filter_by(name=request.form['team_name']).first()
-                if not team:
-                    flash("Team not found.", "danger")
+                team = Team.query.filter_by(name=request.form.get('team_name')).first()
+                member_id = request.form.get('member_id', type=int)
+                user = User.query.filter_by(id=member_id, team_id=team.id).first() if team and member_id else None
+                if user is None:
+                    flash("Member not found in the team. Refresh the admin page and try again.", "danger")
                     return redirect(url_for('admin_panel'))
 
-                user = User.query.filter_by(first_name=first, last_name=last, team_id=team.id).first()
-                if user:
-                    db.session.delete(user)
-                    db.session.commit()
-                    flash(f"Member '{user.first_name} {user.last_name}' removed from '{request.form['team_name']}'!",
-                          "success")
-                else:
-                    flash("Member not found in the team!", "danger")
+                user.team_id = None
+                db.session.commit()
+                flash(f"Member '{user.first_name} {user.last_name}' removed from '{team.name}'!", "success")
 
     except Exception:
         db.session.rollback()
